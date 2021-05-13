@@ -1,0 +1,118 @@
+setwd("/home/pa/Documents/github/doc_suomi/code")
+source("utils.R")
+source("data_cook.R")
+cat(howto_data)
+
+# final = c()
+# for(run in 1:100){
+#     #Base conversion
+    dt = base() %>%
+            group_by(album_id) %>%
+            mutate(valence = greater(valence),
+                energy = greater(energy),
+                loudness = greater(loudness),
+                tempo = greater(tempo)) %>%
+            album_splitter()
+
+    #Random conversion
+    dtr = base() %>% 
+            group_by(album_id) %>%
+            sample_n(length(valence)) %>%
+            mutate(valence = greater(valence),
+                energy = greater(energy), 
+                loudness = greater(loudness),
+                tempo = greater(tempo)) %>%
+            album_splitter()
+
+    #crossval seeds
+    dt = sample(dt, length(dt))
+    dtr = sample(dtr, length(dtr))
+
+    # split into traning and test data
+    dt_train = dt[1:(length(dt)*0.8)];            
+    dt_test  = dt[(length(dt)*0.8):length(dt)];   dr_test   = dtr[(length(dtr)*0.8):length(dtr)]
+
+    valence = c(); energy = c() ;loudness = c(); tempo = c()
+    valence_t = c(); energy_t = c() ;loudness_t = c(); tempo_t = c()
+    rv = c(); re = c() ; rl = c(); rt = c()
+
+    for(i in 1:length(dt_train)){
+        valence[[i]]  <- c(dt_train[[i]]$valence)
+        energy[[i]]   <- c(dt_train[[i]]$energy)
+        loudness[[i]] <- c(dt_train[[i]]$loudness)
+        tempo[[i]]    <- c(dt_train[[i]]$tempo)
+    }
+
+    for(i in 1:length(dt_test)){
+        valence_t[[i]]  <- c(dt_test[[i]]$valence)
+        energy_t[[i]]   <- c(dt_test[[i]]$energy)
+        loudness_t[[i]] <- c(dt_test[[i]]$loudness)
+        tempo_t[[i]]    <- c(dt_test[[i]]$tempo)
+    }
+
+    for(i in 1:length(dr_test)){
+        rv[[i]] <- c(dr_test[[i]]$valence)
+        re[[i]] <- c(dr_test[[i]]$energy)
+        rl[[i]] <- c(dr_test[[i]]$loudness)
+        rt[[i]] <- c(dr_test[[i]]$tempo)
+    }
+
+    states = as.character(c("greater", "smaller", "start"))
+
+    # #Getting the transition
+    v = data.frame(markovchainFit(data = valence)$estimate@transitionMatrix)
+    e = data.frame(markovchainFit(data = energy)$estimate@transitionMatrix)
+    l = data.frame(markovchainFit(data = loudness)$estimate@transitionMatrix)
+    t = data.frame(markovchainFit(data = tempo)$estimate@transitionMatrix)
+
+    #creating the object
+    v <- new("markovchain", states = states, transitionMatrix = matrix(data = as.vector(t(v)), byrow = TRUE, nrow = nrow(v)), name = "valence")
+    e <- new("markovchain", states = states, transitionMatrix = matrix(data = as.vector(t(e)), byrow = TRUE, nrow = nrow(e)), name = "energy")
+    l <- new("markovchain", states = states, transitionMatrix = matrix(data = as.vector(t(l)), byrow = TRUE, nrow = nrow(l)), name = "loudness")
+    t <- new("markovchain", states = states, transitionMatrix = matrix(data = as.vector(t(t)), byrow = TRUE, nrow = nrow(t)), name = "tempo")
+
+    result = tibble(empirical_valence  = unlist(lapply(valence_t, function(x){return(mll(v, x))})),
+                    empirical_energy   = unlist(lapply(energy_t, function(x){return(mll(e, x))})),
+                    empirical_loudness = unlist(lapply(loudness_t, function(x){return(mll(l, x))})),
+                    empirical_tempo    = unlist(lapply(tempo_t, function(x){return(mll(t, x))})),
+
+                    random_valence     = unlist(lapply(rv, function(x){return(mll(v, x))})),
+                    random_energy      = unlist(lapply(re, function(x){return(mll(e, x))})),
+                    random_loudness    = unlist(lapply(rl, function(x){return(mll(l, x))})),
+                    random_tempo       = unlist(lapply(rt, function(x){return(mll(t, x))}))
+        )
+
+    result %>% 
+        melt() %>% 
+        tidyr::separate(variable, c("condition", "feature"), "_") %>%
+        group_by(condition, feature) %>%
+        summarise(likelihood = mean(value),
+                stder = sd(value)/sqrt(length(value))) -> result
+
+#     final[[run]] = result
+# }
+
+
+
+oi = bind_rows(final)
+colnames(oi)
+oi %>%
+    # group_by(condition, feature) %>%
+    # summarise(lh= mean(value), 
+    #           stder = sd(value)/sqrt(length(value))) %>%
+    ggplot(aes(x=likelihood, fill = condition)) +
+        facet_wrap(~feature)+
+        geom_density(alpha = 0.8)
+library(rstatix)
+
+oi %>% filter(condition == 'empirical') %>% filter(feature == "energy") %>% select(likelihood) %>% c() -> emp
+t.test(emp$likelihood, rand$likelihood)
+library(effsize)
+oi %>% dplyr::filter(feature == "energy") ->ha
+cohen.d(emp$likelihood, rand$likelihood, paired = TRUE)
+
+# print("Valence"); v@transitionMatrix; 
+# print("Energy"); e@transitionMatrix; 
+# print("Loudness"); l@transitionMatrix; 
+# print("Tempo"); t@transitionMatrix
+
